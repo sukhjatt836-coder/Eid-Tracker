@@ -1,9 +1,11 @@
-// EID Tracker - Razorpay Backend (webhook-verified)
+// EID Tracker - Razorpay Backend (v3, signature-verified, no webhook needed)
 //
-// This backend does NOT trust the browser to say "payment succeeded."
-// It only marks an order as paid when Razorpay itself sends a signed
-// webhook confirming the payment was captured. That webhook signature
-// is checked with RAZORPAY_WEBHOOK_SECRET below.
+// This does NOT trust the browser just because Checkout says "done."
+// When Checkout completes, it hands back razorpay_payment_id,
+// razorpay_order_id, and razorpay_signature. We recompute that signature
+// server-side using our Key Secret - if it matches, the payment is proven
+// genuine (this is Razorpay's standard verification method and does not
+// require a webhook / Pro plan).
 
 require("dotenv").config();
 const express = require("express");
@@ -13,10 +15,10 @@ const Razorpay = require("razorpay");
 
 const app = express();
 app.use(cors());
+app.use(express.json());
 
 const KEY_ID = process.env.RAZORPAY_KEY_ID;
 const KEY_SECRET = process.env.RAZORPAY_KEY_SECRET;
-const WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
 
 if (!KEY_ID || !KEY_SECRET) {
   console.error("Missing RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET");
@@ -25,9 +27,11 @@ if (!KEY_ID || !KEY_SECRET) {
 
 const razorpay = new Razorpay({ key_id: KEY_ID, key_secret: KEY_SECRET });
 
-const orders = new Map();
+// In-memory store (fine for a small shop; swap for a real DB later).
+const orders = new Map(); // order_id -> { paid, payment_id, receipt }
 
-app.post("/api/create-order", express.json(), async (req, res) => {
+// ---- 1) Create an order ----
+app.post("/api/create-order", async (req, res) => {
   try {
     const { amount, receipt } = req.body;
     if (!amount || amount <= 0) {
@@ -55,60 +59,40 @@ app.post("/api/create-order", express.json(), async (req, res) => {
   }
 });
 
-app.post(
-  "/api/webhook",
-  express.raw({ type: "application/json" }),
-  (req, res) => {
-    if (!WEBHOOK_SECRET) {
-      console.error("RAZORPAY_WEBHOOK_SECRET not set - rejecting webhook");
-      return res.status(500).send("Webhook secret not configured");
-    }
+// ---- 2) Verify payment (called right after Checkout's handler fires) ----
+app.post("/api/verify-payment", (req, res) => {
+  const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
 
-    const signature = req.headers["x-razorpay-signature"];
-    const expected = crypto
-      .createHmac("sha256", WEBHOOK_SECRET)
-      .update(req.body)
-      .digest("hex");
-
-    if (signature !== expected) {
-      console.warn("Webhook signature mismatch - ignoring");
-      return res.status(400).send("Invalid signature");
-    }
-
-    let payload;
-    try {
-      payload = JSON.parse(req.body.toString("utf8"));
-    } catch {
-      return res.status(400).send("Bad payload");
-    }
-
-    const event = payload.event;
-    if (event === "payment.captured" || event === "order.paid") {
-      const paymentEntity = payload.payload?.payment?.entity;
-      const orderId = paymentEntity?.order_id;
-      const paymentId = paymentEntity?.id;
-      if (orderId) {
-        const existing = orders.get(orderId) || {};
-        orders.set(orderId, { ...existing, paid: true, payment_id: paymentId });
-        console.log(`Order ${orderId} confirmed paid via webhook (payment ${paymentId})`);
-      }
-    }
-
-    res.status(200).send("ok");
+  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+    return res.status(400).json({ verified: false, error: "Missing fields" });
   }
-);
 
-app.get("/api/order-status", express.json(), (req, res) => {
+  const body = razorpay_order_id + "|" + razorpay_payment_id;
+  const expected = crypto
+    .createHmac("sha256", KEY_SECRET)
+    .update(body)
+    .digest("hex");
+
+  const isValid = expected === razorpay_signature;
+
+  if (isValid) {
+    const existing = orders.get(razorpay_order_id) || {};
+    orders.set(razorpay_order_id, { ...existing, paid: true, payment_id: razorpay_payment_id });
+    return res.json({ verified: true, payment_id: razorpay_payment_id });
+  }
+
+  return res.status(400).json({ verified: false, error: "Signature mismatch" });
+});
+
+// ---- 3) Order status (frontend polls this after calling verify-payment) ----
+app.get("/api/order-status", (req, res) => {
   const orderId = req.query.order_id;
   if (!orderId) return res.status(400).json({ paid: false, error: "Missing order_id" });
 
   const order = orders.get(orderId);
   if (!order) return res.json({ paid: false });
 
-  res.json({
-    paid: !!order.paid,
-    details: { payment_id: order.payment_id },
-  });
+  res.json({ paid: !!order.paid, details: { payment_id: order.payment_id } });
 });
 
 const PORT = process.env.PORT || 3000;
