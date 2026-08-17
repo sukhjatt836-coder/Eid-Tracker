@@ -1,47 +1,29 @@
-# EID Tracker – Razorpay Backend
-
-Ye chhota backend server hai jo aapki Razorpay **Key Secret** ko safe rakhta hai
-aur payment ka **real** success/fail verify karta hai (fake nahi).
-
-## Ye kya karta hai
-1. `/create-order` — Frontend se amount leke Razorpay par ek order banata hai.
-2. `/verify-payment` — Payment ke baad Razorpay se aaya signature check karta
-   hai. Agar signature match ho, tabhi payment "verified" mana jayega.
-   (Ye woh step hai jo cancel/fake payment ko success dikhne se rokta hai.)
-3. `/order-status/:orderId` — Kisi order ka status check karne ke liye.
-
-## Setup (khud deploy karne ke liye)
-
-### 1. Naya Key Secret banayein
-Aapki purani secret (jo pehle share hui thi) ab unsafe hai. Razorpay Dashboard
-→ Settings → API Keys → Regenerate karke naya secret lein.
-
-### 2. Deploy kahan karein (free options)
-- **Render.com** (recommended, free tier available)
-- **Railway.app**
-- Koi bhi Node.js hosting
-
-### 3. Environment variables set karein
-Deploy karte waqt in do variables ko **hosting ke "Environment Variables"
-section mein** dalen — kisi file mein hardcode na karein:
-
-```
-RAZORPAY_KEY_ID=rzp_test_...
-RAZORPAY_KEY_SECRET=<apki nayi secret>
-```
-
-### 4. Deploy
-- `npm install`
-- `npm start`
-
-Deploy hone ke baad aapko ek URL milega, jaise:
-`https://eid-tracker-backend.onrender.com`
-
-Ye URL mujhe bataiye — main frontend HTML mein isse connect kar dunga taake
-"Pay with UPI app" button real Razorpay Checkout khole aur payment ka asli
-result (success ya cancel) dikhaye.
-
-## Zaroori Safety Note
-- `.env` file ya Key Secret **kabhi bhi GitHub par public repo mein na
-  daalein**.
-- Key Secret sirf hosting ke environment variables mein rahe.
+EID Tracker – Backend (Accounts + Razorpay)
+Ye backend do kaam karta hai:
+Accounts — register/login/change-pin, aur ek time pe sirf ek device pe login (naye device pe login karte hi purana device apne aap logout ho jata hai).
+Payments — Razorpay order banata hai, payment verify karta hai (Key Secret yahin safe rehta hai, kabhi frontend me nahi jaati).
+Data (accounts + saara farm data) ab MongoDB me store hota hai — isliye ek baar login karke jo data save karo, wahi kisi bhi phone se login karke dikhega.
+Naya kya hai (pehle se)
+/api/register, /api/login, /api/logout, /api/change-pin, /api/change-mobile
+/api/account (GET) — apna data fetch karne ke liye
+/api/account/data (PUT) — apna data save karne ke liye
+Payment routes wahi hain (/api/create-order, /api/verify-payment, /api/order-status)
+Setup — MongoDB Atlas (free, hamesha ke liye free rehta hai)
+mongodb.com/cloud/atlas/register pe free account banao.
+"Build a Database" → M0 Free tier select karo → koi bhi region choose karke create karo.
+Database Access → naya user banao (username + password yaad rakhna).
+Network Access → "Allow access from anywhere" (0.0.0.0/0) add karo — Render se connect karne ke liye zaroori hai.
+Connect button → "Drivers" → connection string copy karo, kuch aisa dikhega:
+mongodb+srv://<username>:<password>@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority
+<username> aur <password> apni values se replace karo.
+Deploy (Render)
+In files (server.js, package.json, README.md) ko apne backend GitHub repo me upload/replace karo.
+Render Dashboard → apni service → Environment tab → ye 3 variables set karo:
+RAZORPAY_KEY_ID=<aapki key>
+RAZORPAY_KEY_SECRET=<aapki secret>
+MONGODB_URI=<upar wali connection string>
+Save karte hi Render khud redeploy karega.
+Deploy hone ke baad Render Logs me MongoDB connected dikhna chahiye — agar error aaye to connection string ya Network Access step dobara check karo.
+Zaroori Safety Note
+.env file ya koi bhi secret/password kabhi GitHub par public repo me na daalein.
+Sab secrets sirf Render ke Environment Variables me rahein.
