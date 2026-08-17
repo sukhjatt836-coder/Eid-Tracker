@@ -173,7 +173,10 @@ app.post("/api/change-pin", requireSession, async (req, res) => {
 // (confirmed with the current PIN), and the session stays valid.
 app.post("/api/change-mobile", requireSession, async (req, res) => {
   const newMobile = cleanMobile(req.body.newMobile);
+  const currentPin = String(req.body.currentPin || "");
   if (!/^\d{10}$/.test(newMobile)) return res.json({ ok: false, error: "Enter a valid 10-digit mobile number." });
+  const pinOk = await bcrypt.compare(currentPin, req.account.pinHash);
+  if (!pinOk) return res.json({ ok: false, error: "Current PIN is incorrect." });
   const clash = await Account.findOne({ mobile: newMobile });
   if (clash) return res.json({ ok: false, error: "This number is already registered on another account." });
   req.account.mobile = newMobile;
