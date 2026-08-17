@@ -1,6 +1,9 @@
-// EID Tracker - Razorpay Backend
-// This server is the ONLY place your Razorpay Key Secret should ever live.
-// It never gets sent to the browser.
+// EID Tracker - Razorpay Backend (webhook-verified)
+//
+// This backend does NOT trust the browser to say "payment succeeded."
+// It only marks an order as paid when Razorpay itself sends a signed
+// webhook confirming the payment was captured. That webhook signature
+// is checked with RAZORPAY_WEBHOOK_SECRET below.
 
 require("dotenv").config();
 const express = require("express");
@@ -10,88 +13,102 @@ const Razorpay = require("razorpay");
 
 const app = express();
 app.use(cors());
-app.use(express.json());
 
 const KEY_ID = process.env.RAZORPAY_KEY_ID;
 const KEY_SECRET = process.env.RAZORPAY_KEY_SECRET;
+const WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
 
 if (!KEY_ID || !KEY_SECRET) {
-  console.error(
-    "Missing RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET environment variables."
-  );
+  console.error("Missing RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET");
   process.exit(1);
 }
 
-const razorpay = new Razorpay({
-  key_id: KEY_ID,
-  key_secret: KEY_SECRET,
-});
+const razorpay = new Razorpay({ key_id: KEY_ID, key_secret: KEY_SECRET });
 
-// In-memory store just for demo purposes (swap for a real DB in production).
 const orders = new Map();
 
-// 1) Create an order. The frontend calls this BEFORE opening Razorpay Checkout.
-app.post("/create-order", async (req, res) => {
+app.post("/api/create-order", express.json(), async (req, res) => {
   try {
-    const { amount, notes } = req.body; // amount in rupees, e.g. 450
+    const { amount, receipt } = req.body;
     if (!amount || amount <= 0) {
-      return res.status(400).json({ error: "Invalid amount" });
+      return res.status(400).json({ ok: false, error: "Invalid amount" });
     }
 
     const order = await razorpay.orders.create({
-      amount: Math.round(amount * 100), // Razorpay wants paise
+      amount: Math.round(amount * 100),
       currency: "INR",
-      receipt: "receipt_" + Date.now(),
-      notes: notes || {},
+      receipt: receipt || "receipt_" + Date.now(),
     });
 
-    orders.set(order.id, { status: "created", amount });
+    orders.set(order.id, { paid: false, payment_id: null, receipt: order.receipt });
 
     res.json({
-      orderId: order.id,
+      ok: true,
+      key_id: KEY_ID,
       amount: order.amount,
       currency: order.currency,
-      keyId: KEY_ID, // safe to expose - it's the public key
+      order_id: order.id,
     });
   } catch (err) {
-    console.error("Error creating order:", err);
-    res.status(500).json({ error: "Failed to create order" });
+    console.error("create-order error:", err);
+    res.status(500).json({ ok: false, error: "Failed to create order" });
   }
 });
 
-// 2) Verify payment. The frontend calls this AFTER Razorpay Checkout closes.
-// This is the step that proves a payment was genuinely successful -
-// it recomputes the signature using the secret key and compares it.
-app.post("/verify-payment", (req, res) => {
-  const { razorpay_order_id, razorpay_payment_id, razorpay_signature } =
-    req.body;
+app.post(
+  "/api/webhook",
+  express.raw({ type: "application/json" }),
+  (req, res) => {
+    if (!WEBHOOK_SECRET) {
+      console.error("RAZORPAY_WEBHOOK_SECRET not set - rejecting webhook");
+      return res.status(500).send("Webhook secret not configured");
+    }
 
-  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
-    return res.status(400).json({ verified: false, error: "Missing fields" });
+    const signature = req.headers["x-razorpay-signature"];
+    const expected = crypto
+      .createHmac("sha256", WEBHOOK_SECRET)
+      .update(req.body)
+      .digest("hex");
+
+    if (signature !== expected) {
+      console.warn("Webhook signature mismatch - ignoring");
+      return res.status(400).send("Invalid signature");
+    }
+
+    let payload;
+    try {
+      payload = JSON.parse(req.body.toString("utf8"));
+    } catch {
+      return res.status(400).send("Bad payload");
+    }
+
+    const event = payload.event;
+    if (event === "payment.captured" || event === "order.paid") {
+      const paymentEntity = payload.payload?.payment?.entity;
+      const orderId = paymentEntity?.order_id;
+      const paymentId = paymentEntity?.id;
+      if (orderId) {
+        const existing = orders.get(orderId) || {};
+        orders.set(orderId, { ...existing, paid: true, payment_id: paymentId });
+        console.log(`Order ${orderId} confirmed paid via webhook (payment ${paymentId})`);
+      }
+    }
+
+    res.status(200).send("ok");
   }
+);
 
-  const body = razorpay_order_id + "|" + razorpay_payment_id;
-  const expectedSignature = crypto
-    .createHmac("sha256", KEY_SECRET)
-    .update(body)
-    .digest("hex");
+app.get("/api/order-status", express.json(), (req, res) => {
+  const orderId = req.query.order_id;
+  if (!orderId) return res.status(400).json({ paid: false, error: "Missing order_id" });
 
-  const isValid = expectedSignature === razorpay_signature;
+  const order = orders.get(orderId);
+  if (!order) return res.json({ paid: false });
 
-  if (isValid) {
-    const order = orders.get(razorpay_order_id);
-    if (order) order.status = "paid";
-    return res.json({ verified: true, paymentId: razorpay_payment_id });
-  }
-
-  return res.status(400).json({ verified: false, error: "Signature mismatch" });
-});
-
-// 3) Optional: check status of an order at any time
-app.get("/order-status/:orderId", (req, res) => {
-  const order = orders.get(req.params.orderId);
-  if (!order) return res.status(404).json({ error: "Order not found" });
-  res.json(order);
+  res.json({
+    paid: !!order.paid,
+    details: { payment_id: order.payment_id },
+  });
 });
 
 const PORT = process.env.PORT || 3000;
