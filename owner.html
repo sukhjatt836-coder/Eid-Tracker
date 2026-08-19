@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<meta name="theme-color" content="#35492E" />
+<title>EID Tracker — Owner</title>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#f4f1ea; font-family:Arial,sans-serif; }
+  #root { min-height:100vh; }
+  #boot-msg { padding:24px; color:#555; }
+
+  #authGate {
+    background:#F4EFE1; color:#2A2A22; min-height:100vh; box-sizing:border-box;
+    display:flex; align-items:center; justify-content:center; padding:24px;
+  }
+  #authGate .card { max-width:360px; width:100%; background:#fff; border-radius:20px; padding:28px; box-shadow:0 6px 24px rgba(0,0,0,0.06); box-sizing:border-box; }
+  #authGate .logo {
+    width:64px; height:64px; border-radius:16px; background:#35492E;
+    margin:0 auto 14px; display:flex; align-items:center; justify-content:center;
+    color:#fff; font-size:26px; font-weight:800;
+  }
+  #authGate .brand-title { text-align:center; font-family:Georgia,serif; font-size:22px; font-weight:800; color:#2A2A22; }
+  #authGate .brand-sub { text-align:center; font-size:11px; font-weight:700; letter-spacing:1px; color:#4C6440; text-transform:uppercase; margin-top:2px; }
+  #authGate label { display:block; font-weight:700; margin:14px 0 6px; font-size:13px; color:#2A2A22; }
+  #authGate input {
+    width:100%; padding:12px 14px; border:1px solid #EDE6D3; border-radius:999px;
+    box-sizing:border-box; font-size:14px; background:#fff;
+  }
+  #authGate input:focus { outline:none; border-color:#35492E; }
+  #authGate button { padding:13px 15px; border:none; border-radius:999px; background:#35492E; color:#fff; cursor:pointer; margin-top:16px; width:100%; font-weight:700; font-size:14px; }
+  #authGate .msg { padding:10px 14px; border-radius:10px; margin:14px 0 0; font-size:13px; }
+  #authGate .error { background:#F6E4DF; color:#A24B34; border:1px solid #eac9bd; }
+  #authGate .muted { color:#8a8574; font-size:12px; text-align:center; margin-top:16px; }
+</style>
+</head>
+<body>
+
+<div id="authGate">
+  <div class="card" id="card"></div>
+</div>
+
+<div id="root" style="display:none"><div id="boot-msg">Loading…</div></div>
+
+<div id="fatalErrorBanner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:99999;background:#b00020;color:#fff;padding:14px 16px;font-size:13px;white-space:pre-wrap;max-height:60vh;overflow:auto;"></div>
+<script>
+  window.addEventListener('error', function (e) {
+    var el = document.getElementById('fatalErrorBanner');
+    if (!el) return;
+    el.style.display = 'block';
+    el.textContent = 'App error: ' + (e.message || 'Unknown error') + '\n\nTap to reload.';
+    el.onclick = function () { window.location.reload(); };
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var el = document.getElementById('fatalErrorBanner');
+    if (!el) return;
+    el.style.display = 'block';
+    el.textContent = 'App error (promise): ' + (e.reason && e.reason.message ? e.reason.message : String(e.reason)) + '\n\nTap to reload.';
+    el.onclick = function () { window.location.reload(); };
+  });
+</script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.25.0/babel.min.js"></script>
+
+<script>
+  // ---------------------------------------------------------------------
+  // Same Firebase project as the customer app (index.html) — this file
+  // ONLY reads/writes the same Firestore "kv" collection so it can see
+  // every customer's data. It does not touch the customer app's files.
+  // ---------------------------------------------------------------------
+  const firebaseConfig = {
+    apiKey: "AIzaSyD49NNklvjaf2vSepUo8xcKJ665mCdFlPs",
+    authDomain: "eid-tracker.firebaseapp.com",
+    projectId: "eid-tracker",
+    storageBucket: "eid-tracker.firebasestorage.app",
+    messagingSenderId: "465886239349",
+    appId: "1:465886239349:web:987d8cbc633542c041b63c",
+  };
+
+  let cloudDB = null;
+  try {
+    firebase.initializeApp(firebaseConfig);
+    cloudDB = firebase.firestore();
+  } catch (e) {
+    console.warn('Firebase init failed', e);
+  }
+  window.__cloudReady = !!cloudDB;
+
+  async function cloudListPrefix(prefix) {
+    if (!cloudDB) return [];
+    try {
+      const q = await cloudDB.collection('kv')
+        .where(firebase.firestore.FieldPath.documentId(), '>=', prefix)
+        .where(firebase.firestore.FieldPath.documentId(), '<', prefix + '\uf8ff')
+        .get();
+      return q.docs.map((d) => ({ id: d.id, v: d.data().v }));
+    } catch (e) { console.warn('cloudListPrefix failed', prefix, e); return []; }
+  }
+  async function cloudSet(key, value) {
+    if (!cloudDB) return false;
+    try {
+      await cloudDB.collection('kv').doc(key).set({ v: value, updatedAt: Date.now() });
+      return true;
+    } catch (e) { console.warn('cloudSet failed', key, e); return false; }
+  }
+  window.__ownerCloudListPrefix = cloudListPrefix;
+  window.__ownerCloudSet = cloudSet;
+</script>
+
+<script>
+  // ---------------------------------------------------------------------
+  // OWNER LOGIN GATE — hardcoded to a single mobile number + PIN. Nobody
+  // else can get in, no registration screen, no other account possible.
+  // ---------------------------------------------------------------------
+  const OWNER_MOBILE = '8368037772';
+  const OWNER_PIN = '2487';
+  const SESSION_KEY = 'eidtracker-owner-session';
+
+  let sessionOn = localStorage.getItem(SESSION_KEY) === 'yes';
+
+  function renderGate(error) {
+    const card = document.getElementById('card');
+    if (sessionOn) {
+      document.getElementById('authGate').style.display = 'none';
+      document.getElementById('root').style.display = 'block';
+      window.__ownerReady && window.__ownerReady();
+      return;
+    }
+    document.getElementById('authGate').style.display = 'flex';
+    document.getElementById('root').style.display = 'none';
+    card.innerHTML = `
+      <div class="logo">O</div>
+      <div class="brand-title">EID Tracker</div>
+      <div class="brand-sub">Owner Panel</div>
+      <label>Mobile number</label>
+      <input id="ownerMobile" type="tel" maxlength="10" placeholder="10-digit mobile number" />
+      <label>PIN</label>
+      <input id="ownerPin" type="password" maxlength="4" placeholder="4-digit PIN" />
+      ${error ? `<div class="msg error">${error}</div>` : ''}
+      <button id="ownerLoginBtn">Login</button>
+      <div class="muted">Only the registered owner number can access this panel.</div>
+    `;
+    document.getElementById('ownerLoginBtn').onclick = () => {
+      const m = (document.getElementById('ownerMobile').value || '').replace(/\D/g, '');
+      const p = (document.getElementById('ownerPin').value || '').trim();
+      if (m === OWNER_MOBILE && p === OWNER_PIN) {
+        sessionOn = true;
+        localStorage.setItem(SESSION_KEY, 'yes');
+        renderGate();
+      } else {
+        renderGate('Incorrect mobile number or PIN.');
+      }
+    };
+  }
+
+  window.__ownerLogout = function () {
+    sessionOn = false;
+    localStorage.removeItem(SESSION_KEY);
+    renderGate();
+  };
+
+  renderGate();
+</script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo } = React;
+
+const AUTH_PROFILE_PREFIX = 'eidtracker-offline-v1:profile:';
+const TAG_ORDERS_PREFIX = 'goat-tag-orders:';
+
+const money = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
+
+function OwnerApp() {
+  const [loading, setLoading] = useState(true);
+  const [customers, setCustomers] = useState([]); // [{mobile, profile, orders: []}]
+  const [openMobile, setOpenMobile] = useState(null);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [busyOrderId, setBusyOrderId] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      const [profileDocs, orderDocs] = await Promise.all([
+        window.__ownerCloudListPrefix(AUTH_PROFILE_PREFIX),
+        window.__ownerCloudListPrefix(TAG_ORDERS_PREFIX),
+      ]);
+      const profileByMobile = {};
+      profileDocs.forEach((d) => {
+        const mobile = d.id.slice(AUTH_PROFILE_PREFIX.length);
+        try { profileByMobile[mobile] = JSON.parse(d.v); } catch { profileByMobile[mobile] = null; }
+      });
+      const ordersByMobile = {};
+      orderDocs.forEach((d) => {
+        const mobile = d.id.slice(TAG_ORDERS_PREFIX.length);
+        try { ordersByMobile[mobile] = JSON.parse(d.v) || []; } catch { ordersByMobile[mobile] = []; }
+      });
+      const allMobiles = Array.from(new Set([...Object.keys(profileByMobile), ...Object.keys(ordersByMobile)]));
+      const merged = allMobiles.map((mobile) => ({
+        mobile,
+        profile: profileByMobile[mobile] || null,
+        orders: (ordersByMobile[mobile] || []).slice().sort((a, b) => new Date(b.placedAt || 0) - new Date(a.placedAt || 0)),
+      }));
+      merged.sort((a, b) => (b.orders[0]?.placedAt || '').localeCompare(a.orders[0]?.placedAt || ''));
+      if (!cancelled) { setCustomers(merged); setLoading(false); }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [refreshTick]);
+
+  const totals = useMemo(() => {
+    let totalCustomers = customers.length;
+    let totalOrders = 0, pending = 0, confirmed = 0, cancelled = 0, revenue = 0;
+    customers.forEach((c) => c.orders.forEach((o) => {
+      totalOrders += 1;
+      if (o.status === 'pending_verification') pending += 1;
+      else if (o.status === 'confirmed') { confirmed += 1; revenue += Number(o.totalPrice || 0); }
+      else if (o.status === 'cancelled') cancelled += 1;
+    }));
+    return { totalCustomers, totalOrders, pending, confirmed, cancelled, revenue };
+  }, [customers]);
+
+  const updateOrderStatus = async (mobile, orderId, status) => {
+    setBusyOrderId(orderId);
+    const cust = customers.find((c) => c.mobile === mobile);
+    if (!cust) { setBusyOrderId(null); return; }
+    const nextOrders = cust.orders.map((o) => (o.id === orderId ? { ...o, status } : o));
+    const ok = await window.__ownerCloudSet(TAG_ORDERS_PREFIX + mobile, JSON.stringify(nextOrders));
+    if (ok) {
+      setCustomers((prev) => prev.map((c) => (c.mobile === mobile ? { ...c, orders: nextOrders } : c)));
+    }
+    setBusyOrderId(null);
+  };
+
+  const openCustomer = openMobile ? customers.find((c) => c.mobile === openMobile) : null;
+
+  if (loading) {
+    return <div style={S.page}><div style={S.loading}>Loading customer data…</div></div>;
+  }
+
+  if (openCustomer) {
+    return (
+      <div style={S.page}>
+        <div style={S.topbar}>
+          <button style={S.backBtn} onClick={() => setOpenMobile(null)}>&larr; Back</button>
+          <button style={S.logoutBtn} onClick={() => window.__ownerLogout()}>Logout</button>
+        </div>
+        <div style={S.detailCard}>
+          <div style={S.detailTitle}>{openCustomer.profile?.farmName || 'Unnamed farm'}</div>
+          <div style={S.detailRow}><span>Owner name</span><b>{openCustomer.profile?.ownerName || '—'}</b></div>
+          <div style={S.detailRow}><span>Mobile</span><b>+91 {openCustomer.mobile}</b></div>
+          <div style={S.detailRow}><span>Email</span><b>{openCustomer.profile?.email || '—'}</b></div>
+          <div style={S.detailRow}><span>Registered</span><b>{openCustomer.profile?.registeredAt ? new Date(openCustomer.profile.registeredAt).toLocaleDateString() : '—'}</b></div>
+          <div style={S.detailRow}><span>Total orders</span><b>{openCustomer.orders.length}</b></div>
+          <div style={S.detailRow}><span>Total paid (confirmed)</span><b>{money(openCustomer.orders.filter(o => o.status === 'confirmed').reduce((s, o) => s + Number(o.totalPrice || 0), 0))}</b></div>
+        </div>
+
+        <div style={S.sectionTitle}>Orders ({openCustomer.orders.length})</div>
+        {openCustomer.orders.length === 0 && <div style={S.muted}>No orders yet.</div>}
+        {openCustomer.orders.map((o) => (
+          <div key={o.id} style={S.orderCard}>
+            <div style={S.orderTop}>
+              <div>
+                <div style={S.orderId}>{o.trackingId || o.id}</div>
+                <div style={S.muted}>{o.quantity} tags · {money(o.totalPrice)}</div>
+              </div>
+              <span style={{ ...S.badge, ...(o.status === 'pending_verification' ? S.badgePending : o.status === 'confirmed' ? S.badgeConfirmed : S.badgeCancelled) }}>
+                {o.status === 'pending_verification' ? 'PENDING VERIFICATION' : o.status === 'confirmed' ? 'CONFIRMED' : 'CANCELLED'}
+              </span>
+            </div>
+            <div style={S.orderMeta}>Placed {o.placedAt ? new Date(o.placedAt).toLocaleString() : '—'}</div>
+            <div style={S.orderMeta}>Ship to: {o.name} — {o.address}</div>
+            <div style={S.orderMeta}>Contact: +91 {o.mobile}</div>
+            <div style={S.orderMeta}>Payment method: {o.paymentMethod === 'upi_manual' ? 'UPI (manual)' : o.paymentMethod}</div>
+            {o.manualTxnId && <div style={S.orderMeta}>UPI ref / txn no.: {o.manualTxnId}</div>}
+            {o.razorpayPaymentId && <div style={S.orderMeta}>Razorpay payment ID: {o.razorpayPaymentId}</div>}
+            <div style={S.orderMeta}>Price: {o.quantity} × {money(o.pricePerUnit)} + {money(o.deliveryCharge)} delivery = {money(o.totalPrice)}</div>
+
+            {o.status === 'pending_verification' && (
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <button
+                  style={S.primaryBtn}
+                  disabled={busyOrderId === o.id}
+                  onClick={() => updateOrderStatus(openCustomer.mobile, o.id, 'confirmed')}
+                >
+                  {busyOrderId === o.id ? 'Saving…' : 'Mark as paid'}
+                </button>
+                <button
+                  style={S.ghostBtn}
+                  disabled={busyOrderId === o.id}
+                  onClick={() => updateOrderStatus(openCustomer.mobile, o.id, 'cancelled')}
+                >
+                  Cancel order
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div style={S.page}>
+      <div style={S.topbar}>
+        <div style={S.title}>Owner Panel</div>
+        <button style={S.logoutBtn} onClick={() => window.__ownerLogout()}>Logout</button>
+      </div>
+
+      <div style={S.statsGrid}>
+        <div style={S.statCard}><div style={S.statNum}>{totals.totalCustomers}</div><div style={S.statLabel}>Customers</div></div>
+        <div style={S.statCard}><div style={S.statNum}>{totals.totalOrders}</div><div style={S.statLabel}>Total orders</div></div>
+        <div style={S.statCard}><div style={S.statNum}>{totals.pending}</div><div style={S.statLabel}>Pending verification</div></div>
+        <div style={S.statCard}><div style={{ ...S.statNum, color: '#35492E' }}>{money(totals.revenue)}</div><div style={S.statLabel}>Confirmed revenue</div></div>
+      </div>
+
+      <div style={S.sectionTitle}>Customers ({customers.length})</div>
+      <button style={S.refreshBtn} onClick={() => setRefreshTick((t) => t + 1)}>Refresh</button>
+      {customers.length === 0 && <div style={S.muted}>No customers yet.</div>}
+      {customers.map((c) => {
+        const pendingCount = c.orders.filter((o) => o.status === 'pending_verification').length;
+        return (
+          <div key={c.mobile} style={S.customerCard} onClick={() => setOpenMobile(c.mobile)}>
+            <div>
+              <div style={S.custName}>{c.profile?.farmName || c.profile?.ownerName || 'Unnamed'}</div>
+              <div style={S.muted}>+91 {c.mobile} · {c.orders.length} orders</div>
+            </div>
+            {pendingCount > 0 && <span style={{ ...S.badge, ...S.badgePending }}>{pendingCount} PENDING</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const S = {
+  page: { fontFamily: 'Arial,sans-serif', background: '#f4f1ea', minHeight: '100vh', padding: '16px', boxSizing: 'border-box', color: '#2A2A22' },
+  loading: { textAlign: 'center', padding: '60px 0', color: '#8a8574' },
+  topbar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
+  title: { fontFamily: 'Georgia,serif', fontSize: 22, fontWeight: 800 },
+  backBtn: { border: 'none', background: 'none', color: '#35492E', fontWeight: 700, fontSize: 14, cursor: 'pointer', padding: 0 },
+  logoutBtn: { border: '1px solid #35492E', background: '#fff', color: '#35492E', fontWeight: 700, fontSize: 13, padding: '8px 14px', borderRadius: 999, cursor: 'pointer' },
+  refreshBtn: { border: '1px solid #EDE6D3', background: '#fff', color: '#35492E', fontWeight: 700, fontSize: 12, padding: '6px 12px', borderRadius: 999, cursor: 'pointer', marginBottom: 12 },
+  statsGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 20 },
+  statCard: { background: '#fff', borderRadius: 16, padding: '16px', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' },
+  statNum: { fontSize: 22, fontWeight: 800 },
+  statLabel: { fontSize: 12, color: '#8a8574', marginTop: 4 },
+  sectionTitle: { fontWeight: 800, fontSize: 15, margin: '18px 0 10px' },
+  muted: { color: '#8a8574', fontSize: 12, marginTop: 2 },
+  customerCard: { background: '#fff', borderRadius: 16, padding: '14px 16px', marginBottom: 10, boxShadow: '0 2px 8px rgba(0,0,0,0.04)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' },
+  custName: { fontWeight: 700, fontSize: 15 },
+  detailCard: { background: '#fff', borderRadius: 16, padding: '16px', marginBottom: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.04)' },
+  detailTitle: { fontFamily: 'Georgia,serif', fontWeight: 800, fontSize: 18, marginBottom: 10 },
+  detailRow: { display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '5px 0', borderBottom: '1px solid #F4EFE1' },
+  orderCard: { background: '#fff', borderRadius: 16, padding: '14px 16px', marginBottom: 10, boxShadow: '0 2px 8px rgba(0,0,0,0.04)' },
+  orderTop: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' },
+  orderId: { fontWeight: 800, fontSize: 14 },
+  orderMeta: { fontSize: 12, color: '#5c5a4d', marginTop: 4 },
+  badge: { fontSize: 10, fontWeight: 800, padding: '4px 10px', borderRadius: 999, whiteSpace: 'nowrap' },
+  badgePending: { background: '#FCEFD6', color: '#A2701E' },
+  badgeConfirmed: { background: '#E1F0DE', color: '#2F6B2A' },
+  badgeCancelled: { background: '#F6E4DF', color: '#A24B34' },
+  primaryBtn: { flex: 1, background: '#35492E', color: '#fff', border: 'none', borderRadius: 999, padding: '10px', fontWeight: 700, fontSize: 13, cursor: 'pointer' },
+  ghostBtn: { flex: 1, background: '#fff', color: '#35492E', border: '1px solid #35492E', borderRadius: 999, padding: '10px', fontWeight: 700, fontSize: 13, cursor: 'pointer' },
+};
+
+window.__ownerReady = function () {
+  const root = ReactDOM.createRoot(document.getElementById('root'));
+  root.render(<OwnerApp />);
+};
+if (localStorage.getItem('eidtracker-owner-session') === 'yes') {
+  window.__ownerReady();
+}
+</script>
+</body>
+</html>
